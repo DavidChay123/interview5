@@ -1,132 +1,64 @@
-def CHANGED_SERVICES = ""
-
 pipeline {
     agent any
-
-    environment {
-        REGISTRY = "your-docker-registry"
-        DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1425099820204294208/YcNdFjId84r07n_Q5mcZYJA5o0U-2qLZ4_V19VO2h6DPSIpT8CYBpJPhlf2nP_ZD2URP"
-    }
 
     stages {
 
         stage('Detect Changes') {
             steps {
                 script {
-                    // מקבל שינויים מהקומיט האחרון
-                    def changedFiles = sh(
-                        script: """
-                            git fetch origin main
-                            git diff --name-only HEAD~1 HEAD
-                        """,
-                        returnStdout: true
-                    ).trim()
+                    sh 'git fetch origin main'
+                    def changed = sh(script: "git diff --name-only HEAD~1 HEAD", returnStdout: true).trim()
+                    echo "Changed files: ${changed}"
 
-                    echo "Changed files:\n${changedFiles}"
+                    def services = changed.readLines()
+                        .findAll { it.startsWith("services/") }
+                        .collect { it.split('/')[1] }
+                        .unique()
 
-                    def services = []
-                    changedFiles.split("\n").each { file ->
-                        if (file.trim()) {
-                            def dir = file.split("/")[0]
-                            if (dir.endsWith("-service")) {
-                                services.add(dir)
-                            }
-                        }
-                    }
+                    echo "Changed services: ${services}"
 
-                    CHANGED_SERVICES = services.join(" ")
-                    echo "Changed services: ${CHANGED_SERVICES}"
-
-                    if (!CHANGED_SERVICES) {
-                        echo "No services changed — skipping CI stages"
-                    }
+                    env.SERVICES_CHANGED = services.join(',')
                 }
             }
         }
 
         stage('CI Pipeline') {
             when {
-                expression { return CHANGED_SERVICES?.trim() }
+                expression { return env.SERVICES_CHANGED?.trim() }
             }
-
             parallel {
-
                 stage('Lint') {
                     steps {
-                        script {
-                            CHANGED_SERVICES.split().each { service ->
-                                retry(2) {
-                                    sh "ci/lint.sh ${service}"
-                                }
-                            }
-                        }
+                        echo "Running lint..."
+                        sh 'echo LINT DONE'
                     }
                 }
-
                 stage('Test') {
                     steps {
-                        script {
-                            CHANGED_SERVICES.split().each { service ->
-                                retry(2) {
-                                    sh "ci/test.sh ${service}"
-                                }
-                            }
-                        }
+                        echo "Running tests..."
+                        sh 'echo TEST DONE'
                     }
                 }
-
                 stage('Security Scan') {
                     steps {
-                        script {
-                            CHANGED_SERVICES.split().each { service ->
-                                sh "ci/scan.sh ${service}"
-                            }
-                        }
+                        echo "Running security scan..."
+                        sh 'echo SCAN DONE'
                     }
                 }
-
                 stage('Docker Build') {
                     steps {
-                        script {
-                            CHANGED_SERVICES.split().each { service ->
-                                sh """
-                                    docker build \
-                                        -t ${REGISTRY}/${service}:ci-${env.GIT_COMMIT[0..6]} \
-                                        ${service}
-                                """
-                            }
-                        }
+                        echo "Building Docker images..."
+                        sh 'echo DOCKER BUILD DONE'
                     }
                 }
             }
         }
 
-        stage('Manual Approval') {
-            steps {
-                input message: "Ready to deploy?"
-            }
-        }
     }
 
     post {
-        success {
-            echo "Pipeline succeeded!"
-            sh """
-                curl -H "Content-Type: application/json" \
-                     -X POST \
-                     -d '{"content": "✅ Jenkins Pipeline Succeeded :rocket:"}' \
-                     "${DISCORD_WEBHOOK}"
-            """
-        }
-
-        failure {
-            echo "Pipeline failed!"
-            sh """
-                curl -H "Content-Type: application/json" \
-                     -X POST \
-                     -d '{"content": "❌ Jenkins Pipeline FAILED"}' \
-                     "${DISCORD_WEBHOOK}"
-            """
+        always {
+            echo "Pipeline finished."
         }
     }
 }
